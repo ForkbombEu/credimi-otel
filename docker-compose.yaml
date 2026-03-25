@@ -91,19 +91,138 @@ services:
         source: otel_prometheus_data
         target: /prometheus
 
-
 configs:
   otel_collector_config:
-    file: ./deployment/observability/otel-collector/config.yaml
-  data_prepper_config:
-    file: ./deployment/observability/data-prepper/data-prepper-config.yaml
-  data_prepper_pipelines:
-    file: ./deployment/observability/data-prepper/pipelines.yaml
-  dashboards_saved_objects:
-    file: ./deployment/observability/opensearch-dashboards/saved-objects/credimi-otel.ndjson
-  prometheus_config:
-    file: ./deployment/observability/prometheus/prometheus.yaml
+    content: |
+      extensions:
+        health_check:
+          endpoint: 0.0.0.0:13133
 
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:4317
+            http:
+              endpoint: 0.0.0.0:4318
+
+      processors:
+        batch: {}
+
+      exporters:
+        otlp_grpc/data_prepper_traces:
+          endpoint: data-prepper:21890
+          tls:
+            insecure: true
+
+        otlp_grpc/data_prepper_logs:
+          endpoint: data-prepper:21892
+          tls:
+            insecure: true
+
+        prometheus:
+          endpoint: 0.0.0.0:8889
+
+      service:
+        extensions:
+          - health_check
+        pipelines:
+          traces:
+            receivers:
+              - otlp
+            processors:
+              - batch
+            exporters:
+              - otlp_grpc/data_prepper_traces
+          logs:
+            receivers:
+              - otlp
+            processors:
+              - batch
+            exporters:
+              - otlp_grpc/data_prepper_logs
+          metrics:
+            receivers:
+              - otlp
+            processors:
+              - batch
+            exporters:
+              - prometheus
+  data_prepper_config:
+    content: |
+      ssl: false
+      serverPort: 4900
+  data_prepper_pipelines:
+    content: |
+      otel-trace-pipeline:
+        delay: "100"
+        source:
+          otel_trace_source:
+            port: 21890
+            ssl: false
+            output_format: otel
+        sink:
+          - pipeline:
+              name: trace-raw-pipeline
+          - pipeline:
+              name: trace-service-map-pipeline
+
+      trace-raw-pipeline:
+        source:
+          pipeline:
+            name: otel-trace-pipeline
+        processor:
+          - otel_traces:
+        sink:
+          - opensearch:
+              hosts: ["http://opensearch:9200"]
+              insecure: true
+              index_type: trace-analytics-raw
+
+      trace-service-map-pipeline:
+        delay: "100"
+        source:
+          pipeline:
+            name: otel-trace-pipeline
+        processor:
+          - service_map:
+        sink:
+          - opensearch:
+              hosts: ["http://opensearch:9200"]
+              insecure: true
+              index_type: trace-analytics-service-map
+
+      otel-logs-pipeline:
+        source:
+          otel_logs_source:
+            port: 21892
+            ssl: false
+            output_format: otel
+        sink:
+          - opensearch:
+              hosts: ["http://opensearch:9200"]
+              insecure: true
+              index: credimi-otel-logs
+  dashboards_saved_objects:
+    content: |
+      {"type":"index-pattern","id":"credimi-otel-logs","attributes":{"title":"credimi-otel-logs*","timeFieldName":"time","fieldAttrs":"{\"body\":{\"customLabel\":\"Log\"},\"severityText\":{\"customLabel\":\"Level\"},\"resource.attributes.runner_id\":{\"customLabel\":\"Runner\"},\"attributes.namespace\":{\"customLabel\":\"Namespace\"},\"attributes.activity_name\":{\"customLabel\":\"Activity\"},\"attributes.device_serial\":{\"customLabel\":\"Device\"},\"attributes.workflow_id\":{\"customLabel\":\"Workflow\"},\"attributes.run_id\":{\"customLabel\":\"Run\"},\"attributes.task_queue\":{\"customLabel\":\"Queue\"}}"}}
+      {"type":"visualization","id":"credimi-otel-filters","attributes":{"title":"Credimi OTel Filters","description":"Simple dropdown filters for runners, workers, and runs.","version":1,"visState":"{\"title\":\"Credimi OTel Filters\",\"type\":\"input_control_vis\",\"params\":{\"controls\":[{\"id\":\"1\",\"fieldName\":\"resource.attributes.runner_id.keyword\",\"label\":\"Runner\",\"type\":\"list\",\"options\":{\"type\":\"terms\",\"multiselect\":false,\"size\":50,\"order\":\"desc\"},\"indexPatternRefName\":\"control_0_index_pattern\"},{\"id\":\"2\",\"fieldName\":\"attributes.namespace.keyword\",\"label\":\"Namespace\",\"type\":\"list\",\"options\":{\"type\":\"terms\",\"multiselect\":false,\"size\":100,\"order\":\"desc\"},\"indexPatternRefName\":\"control_1_index_pattern\",\"parent\":\"1\"},{\"id\":\"3\",\"fieldName\":\"attributes.workflow_id.keyword\",\"label\":\"Workflow\",\"type\":\"list\",\"options\":{\"type\":\"terms\",\"multiselect\":false,\"size\":200,\"order\":\"desc\"},\"indexPatternRefName\":\"control_2_index_pattern\",\"parent\":\"2\"},{\"id\":\"4\",\"fieldName\":\"attributes.run_id.keyword\",\"label\":\"Run\",\"type\":\"list\",\"options\":{\"type\":\"terms\",\"multiselect\":false,\"size\":200,\"order\":\"desc\"},\"indexPatternRefName\":\"control_3_index_pattern\",\"parent\":\"3\"},{\"id\":\"5\",\"fieldName\":\"attributes.activity_name.keyword\",\"label\":\"Activity\",\"type\":\"list\",\"options\":{\"type\":\"terms\",\"multiselect\":false,\"size\":200,\"order\":\"desc\"},\"indexPatternRefName\":\"control_4_index_pattern\",\"parent\":\"3\"},{\"id\":\"6\",\"fieldName\":\"attributes.device_serial.keyword\",\"label\":\"Device\",\"type\":\"list\",\"options\":{\"type\":\"terms\",\"multiselect\":false,\"size\":200,\"order\":\"desc\"},\"indexPatternRefName\":\"control_5_index_pattern\",\"parent\":\"3\"}],\"updateFiltersOnChange\":true,\"useTimeFilter\":true,\"pinFilters\":true},\"aggs\":[]}","uiStateJSON":"{}","kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[]}"}},"references":[{"id":"credimi-otel-logs","name":"control_0_index_pattern","type":"index-pattern"},{"id":"credimi-otel-logs","name":"control_1_index_pattern","type":"index-pattern"},{"id":"credimi-otel-logs","name":"control_2_index_pattern","type":"index-pattern"},{"id":"credimi-otel-logs","name":"control_3_index_pattern","type":"index-pattern"},{"id":"credimi-otel-logs","name":"control_4_index_pattern","type":"index-pattern"},{"id":"credimi-otel-logs","name":"control_5_index_pattern","type":"index-pattern"}]}
+      {"type":"search","id":"credimi-otel-run-logs","attributes":{"title":"Run And Activity Logs","description":"Workflow, activity, and command-step logs with the main identifiers visible next to the body.","columns":["body","attributes.activity_name","attributes.device_serial","attributes.workflow_id","attributes.run_id","severityText"],"sort":[["time","desc"]],"kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"language\":\"kuery\",\"query\":\"attributes.workflow_id: * or attributes.activity_name: * or attributes.command_step: *\"},\"filter\":[],\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"}},"references":[{"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"credimi-otel-logs"}]}
+      {"type":"search","id":"credimi-otel-warnings-errors","attributes":{"title":"Warnings And Errors","description":"Warnings and errors kept separate for quick scanning.","columns":["body","attributes.activity_name","attributes.device_serial","attributes.workflow_id","attributes.run_id","severityText"],"sort":[["time","desc"]],"kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"language\":\"kuery\",\"query\":\"severityText : (warn or error)\"},\"filter\":[],\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"}},"references":[{"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"credimi-otel-logs"}]}
+      {"type":"search","id":"credimi-otel-worker-logs","attributes":{"title":"Worker Lifecycle Logs","description":"Runner and worker lifecycle logs kept separate from run logs, with runner and namespace visible.","columns":["body","resource.attributes.runner_id","attributes.namespace","attributes.task_queue","severityText"],"sort":[["time","desc"]],"kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"language\":\"kuery\",\"query\":\"body : \\\"*temporal worker*\\\" or body : \\\"*starting worker for namespace*\\\" or body : \\\"*worker already running for namespace*\\\" or body : \\\"*failed to start worker for namespace*\\\"\"},\"filter\":[],\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"}},"references":[{"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"credimi-otel-logs"}]}
+      {"type":"search","id":"credimi-otel-avdctl-logs","attributes":{"title":"AVDCTL Logs","description":"Generic avdctl library logs emitted through OTLP, separate from Credimi activity-field filters.","columns":["body","attributes.command","attributes.args","attributes.correlation_id","attributes.trace_id","attributes.span_id","severityText"],"sort":[["time","desc"]],"kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"language\":\"kuery\",\"query\":\"instrumentationScope.name : (\\\"avdctl\\\" or \\\"avdctl/*\\\") or scope.name : (\\\"avdctl\\\" or \\\"avdctl/*\\\") or (attributes.command : * and not attributes.command_name : *)\"},\"filter\":[],\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"}},"references":[{"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"credimi-otel-logs"}]}
+      {"type":"dashboard","id":"credimi-otel-overview","attributes":{"title":"Credimi OTel Overview","description":"Simple dashboard to verify OTel logs are flowing from credimi-runner into OpenSearch.","hits":0,"optionsJSON":"{\"useMargins\":true,\"hidePanelTitles\":false}","panelsJSON":"[{\"version\":\"2.11.1\",\"type\":\"visualization\",\"panelIndex\":\"1\",\"gridData\":{\"x\":0,\"y\":0,\"w\":48,\"h\":5,\"i\":\"1\"},\"embeddableConfig\":{},\"panelRefName\":\"panel_0\"},{\"version\":\"2.11.1\",\"type\":\"search\",\"panelIndex\":\"2\",\"gridData\":{\"x\":0,\"y\":5,\"w\":48,\"h\":16,\"i\":\"2\"},\"embeddableConfig\":{},\"panelRefName\":\"panel_1\"},{\"version\":\"2.11.1\",\"type\":\"search\",\"panelIndex\":\"3\",\"gridData\":{\"x\":0,\"y\":21,\"w\":48,\"h\":8,\"i\":\"3\"},\"embeddableConfig\":{},\"panelRefName\":\"panel_2\"},{\"version\":\"2.11.1\",\"type\":\"search\",\"panelIndex\":\"4\",\"gridData\":{\"x\":0,\"y\":29,\"w\":48,\"h\":9,\"i\":\"4\"},\"embeddableConfig\":{},\"panelRefName\":\"panel_3\"},{\"version\":\"2.11.1\",\"type\":\"search\",\"panelIndex\":\"5\",\"gridData\":{\"x\":0,\"y\":38,\"w\":48,\"h\":10,\"i\":\"5\"},\"embeddableConfig\":{},\"panelRefName\":\"panel_4\"}]","timeRestore":true,"timeFrom":"now-30d","timeTo":"now","kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"language\":\"kuery\",\"query\":\"\"},\"filter\":[]}"}},"references":[{"name":"panel_0","type":"visualization","id":"credimi-otel-filters"},{"name":"panel_1","type":"search","id":"credimi-otel-run-logs"},{"name":"panel_2","type":"search","id":"credimi-otel-warnings-errors"},{"name":"panel_3","type":"search","id":"credimi-otel-worker-logs"},{"name":"panel_4","type":"search","id":"credimi-otel-avdctl-logs"}]}
+  prometheus_config:
+    content: |
+      global:
+        scrape_interval: 15s
+        evaluation_interval: 15s
+
+      scrape_configs:
+        - job_name: otel-collector
+          static_configs:
+            - targets:
+                - otel-collector:8889
 
 volumes:
   otel_opensearch_data:
