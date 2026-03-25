@@ -8,9 +8,8 @@ services:
     restart: unless-stopped
     command:
       - --config=/etc/otel-collector/config.yaml
-    volumes:
-      - type: bind
-        source: ./deployment/observability/otel-collector/config.yaml
+    configs:
+      - source: otel_collector_config
         target: /etc/otel-collector/config.yaml
     ports:
       - "${OTEL_COLLECTOR_GRPC_PORT:-4317}:4317"
@@ -22,12 +21,10 @@ services:
   data-prepper:
     image: ${DATA_PREPPER_IMAGE:-opensearchproject/data-prepper:latest}
     restart: unless-stopped
-    volumes:
-      - type: bind
-        source: ./deployment/observability/data-prepper/data-prepper-config.yaml
+    configs:
+      - source: data_prepper_config
         target: /usr/share/data-prepper/config/data-prepper-config.yaml
-      - type: bind
-        source: ./deployment/observability/data-prepper/pipelines.yaml
+      - source: data_prepper_pipelines
         target: /usr/share/data-prepper/pipelines/pipelines.yaml
     depends_on:
       - opensearch
@@ -74,10 +71,9 @@ services:
         curl -fsS -X POST 'http://opensearch-dashboards:5601/api/saved_objects/_import?overwrite=true' \
           -H 'osd-xsrf: true' \
           --form file=@/saved-objects/credimi-otel.ndjson
-    volumes:
-      - type: bind
-        source: ./deployment/observability/opensearch-dashboards/saved-objects
-        target: /saved-objects
+    configs:
+      - source: dashboards_saved_objects
+        target: /saved-objects/credimi-otel.ndjson
     depends_on:
       - opensearch-dashboards
   otel-prometheus:
@@ -87,16 +83,28 @@ services:
       - --config.file=/etc/prometheus/prometheus.yaml
       - --storage.tsdb.path=/prometheus
       - --web.enable-lifecycle
-    volumes:
-      - type: bind
-        source: ./deployment/observability/prometheus/prometheus.yaml
+    configs:
+      - source: prometheus_config
         target: /etc/prometheus/prometheus.yaml
+    volumes:
       - type: volume
         source: otel_prometheus_data
         target: /prometheus
 
 
+configs:
+  otel_collector_config:
+    file: ./deployment/observability/otel-collector/config.yaml
+  data_prepper_config:
+    file: ./deployment/observability/data-prepper/data-prepper-config.yaml
+  data_prepper_pipelines:
+    file: ./deployment/observability/data-prepper/pipelines.yaml
+  dashboards_saved_objects:
+    file: ./deployment/observability/opensearch-dashboards/saved-objects/credimi-otel.ndjson
+  prometheus_config:
+    file: ./deployment/observability/prometheus/prometheus.yaml
+
+
 volumes:
   otel_opensearch_data:
   otel_prometheus_data:
-
