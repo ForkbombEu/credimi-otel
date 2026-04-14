@@ -17,6 +17,7 @@ services:
       - "${OTEL_COLLECTOR_HEALTH_PORT:-13133}:13133"
     depends_on:
       - data-prepper
+      - jaeger
       - otel-prometheus
   data-prepper:
     image: ${DATA_PREPPER_IMAGE:-opensearchproject/data-prepper:latest}
@@ -58,6 +59,14 @@ services:
       - "${OPENSEARCH_DASHBOARDS_PORT:-5601}:5601"
     depends_on:
       - opensearch
+  jaeger:
+    image: ${JAEGER_IMAGE:-jaegertracing/jaeger:2.17.0}
+    restart: unless-stopped
+    command:
+      - --set=receivers.otlp.protocols.grpc.endpoint=0.0.0.0:4317
+      - --set=receivers.otlp.protocols.http.endpoint=0.0.0.0:4318
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
   dashboards-bootstrap:
     image: ${DASHBOARDS_BOOTSTRAP_IMAGE:-curlimages/curl:8.7.1}
     restart: "no"
@@ -110,8 +119,8 @@ configs:
         batch: {}
 
       exporters:
-        otlp_grpc/data_prepper_traces:
-          endpoint: data-prepper:21890
+        otlp_grpc/jaeger_traces:
+          endpoint: jaeger:4317
           tls:
             insecure: true
 
@@ -133,7 +142,7 @@ configs:
             processors:
               - batch
             exporters:
-              - otlp_grpc/data_prepper_traces
+              - otlp_grpc/jaeger_traces
           logs:
             receivers:
               - otlp
@@ -154,44 +163,6 @@ configs:
       serverPort: 4900
   data_prepper_pipelines:
     content: |
-      otel-trace-pipeline:
-        delay: "100"
-        source:
-          otel_trace_source:
-            port: 21890
-            ssl: false
-            output_format: otel
-        sink:
-          - pipeline:
-              name: trace-raw-pipeline
-          - pipeline:
-              name: trace-service-map-pipeline
-
-      trace-raw-pipeline:
-        source:
-          pipeline:
-            name: otel-trace-pipeline
-        processor:
-          - otel_traces:
-        sink:
-          - opensearch:
-              hosts: ["http://opensearch:9200"]
-              insecure: true
-              index_type: trace-analytics-raw
-
-      trace-service-map-pipeline:
-        delay: "100"
-        source:
-          pipeline:
-            name: otel-trace-pipeline
-        processor:
-          - service_map:
-        sink:
-          - opensearch:
-              hosts: ["http://opensearch:9200"]
-              insecure: true
-              index_type: trace-analytics-service-map
-
       otel-logs-pipeline:
         source:
           otel_logs_source:
